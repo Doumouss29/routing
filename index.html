@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Navigation en temps réel</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+    <script src="https://unpkg.com/leaflet-control-geocoder@1.13.0/dist/Control.Geocoder.js"></script>
+
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+        }
+        #map {
+            width: 100%;
+            height: 85vh;
+        }
+        .container {
+            padding: 10px;
+            text-align: center;
+        }
+        input {
+            padding: 5px;
+            margin: 5px;
+            width: 200px;
+        }
+        button {
+            padding: 8px 12px;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #time {
+            font-size: 18px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <button onclick="getUserLocation()">📍 Utiliser ma position</button>
+        <br>
+        <label for="start">Départ :</label>
+        <input type="text" id="start" placeholder="Entrez l'adresse de départ">
+        
+        <label for="end">Arrivée :</label>
+        <input type="text" id="end" placeholder="Entrez l'adresse d'arrivée">
+        
+        <button onclick="calculateRoute()">🚗 Démarrer la navigation</button>
+        
+        <div id="time"></div> <!-- Affichage du temps de trajet -->
+    </div>
+
+    <div id="map"></div>
+
+    <script>
+        var map = L.map('map').setView([7.594943, -5.533495], 6);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        var control;
+        var userMarker;
+        var watchId; // ID pour arrêter la géolocalisation
+        var durationDisplay = document.getElementById('time'); // Élément pour afficher la durée
+
+        // Fonction pour obtenir la position de l'utilisateur
+        function getUserLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(function(position) {
+                    var userLatLng = [position.coords.latitude, position.coords.longitude];
+
+                    // Ajoute un marqueur utilisateur
+                    if (userMarker) {
+                        userMarker.setLatLng(userLatLng);
+                    } else {
+                        userMarker = L.marker(userLatLng).addTo(map)
+                            .bindPopup("📍 Vous êtes ici").openPopup();
+                    }
+
+                    map.setView(userLatLng, 14); // Zoom sur l'utilisateur
+                    document.getElementById('start').value = userLatLng.join(','); // Renseigne le champ départ
+
+                }, function() {
+                    alert("Impossible d'obtenir votre position !");
+                });
+            } else {
+                alert("La géolocalisation n'est pas supportée par votre navigateur.");
+            }
+        }
+
+        // Fonction pour calculer l'itinéraire
+        function calculateRoute() {
+            var startPoint = document.getElementById('start').value;
+            var endPoint = document.getElementById('end').value;
+
+            if (startPoint && endPoint) {
+                var geocoder = L.Control.Geocoder.nominatim();
+
+                function geocodeAndRoute(start, end) {
+                    var startLatLng = start.includes(",") ? L.latLng(start.split(",")) : null;
+                    var endLatLng = end.includes(",") ? L.latLng(end.split(",")) : null;
+
+                    if (startLatLng && endLatLng) {
+                        startNavigation(startLatLng, endLatLng);
+                    } else {
+                        geocoder.geocode(start, function(results) {
+                            if (!results.length) {
+                                alert("Adresse de départ introuvable !");
+                                return;
+                            }
+                            startLatLng = results[0].center;
+
+                            geocoder.geocode(end, function(results) {
+                                if (!results.length) {
+                                    alert("Adresse d'arrivée introuvable !");
+                                    return;
+                                }
+                                endLatLng = results[0].center;
+                                startNavigation(startLatLng, endLatLng);
+                            });
+                        });
+                    }
+                }
+
+                geocodeAndRoute(startPoint, endPoint);
+            }
+        }
+
+        // Fonction pour démarrer la navigation
+        function startNavigation(startLatLng, endLatLng) {
+            // Suppression de l'itinéraire précédent
+            if (control) {
+                map.removeControl(control);
+            }
+
+            control = L.Routing.control({
+                waypoints: [L.latLng(startLatLng), L.latLng(endLatLng)],
+                routeWhileDragging: true
+            }).addTo(map);
+
+            L.Routing.errorControl(control).addTo(map);
+
+            // Activer la géolocalisation en temps réel
+            if (navigator.geolocation) {
+                watchId = navigator.geolocation.watchPosition(function(position) {
+                    var newUserLatLng = L.latLng(position.coords.latitude, position.coords.longitude);
+
+                    if (userMarker) {
+                        userMarker.setLatLng(newUserLatLng);
+                    } else {
+                        userMarker = L.marker(newUserLatLng).addTo(map)
+                            .bindPopup("📍 Vous êtes ici").openPopup();
+                    }
+
+                    map.setView(newUserLatLng, 15);
+
+                    // Mise à jour du départ pour recalculer la route
+                    control.setWaypoints([newUserLatLng, endLatLng]);
+
+                    // Recalculer le temps de trajet
+                    updateTravelTime(newUserLatLng, endLatLng);
+
+                }, function() {
+                    alert("Suivi GPS indisponible !");
+                }, {
+                    enableHighAccuracy: true,
+                    maximumAge: 0,
+                    timeout: 5000
+                });
+            }
+        }
+
+        // Fonction pour mettre à jour le temps de trajet en fonction de la position de l'utilisateur
+        function updateTravelTime(startLatLng, endLatLng) {
+            var geocoder = L.Control.Geocoder.nominatim();
+            var route = L.Routing.control({
+                waypoints: [startLatLng, endLatLng],
+                routeWhileDragging: true
+            });
+
+            route.getRoutes().then(function(routes) {
+                if (routes.length) {
+                    var duration = routes[0].summary.totalDuration;
+                    var minutes = Math.floor(duration / 60);
+                    var seconds = Math.floor(duration % 60);
+                    durationDisplay.innerHTML = `Temps estimé : ${minutes} min ${seconds} s`;
+                }
+            });
+        }
+
+    </script>
+
+</body>
+</html>
